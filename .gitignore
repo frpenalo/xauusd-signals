@@ -1,4 +1,6 @@
 data/ticks/
 data/candles/
+config/telegram.env
+logs/
 __pycache__/
 *.pyc

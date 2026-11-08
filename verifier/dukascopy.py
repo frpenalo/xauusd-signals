@@ -23,7 +23,7 @@ BASE_URL = "http://datafeed.dukascopy.com/datafeed"
 PRICE_SCALE = {"XAUUSD": 1000.0}
 TICK_STRUCT = struct.Struct(">3I2f")
 USER_AGENT = "Mozilla/5.0 (xauusd-signals verifier)"
-REQUEST_PAUSE_S = 0.4
+REQUEST_PAUSE_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ def hour_cache_path(root: Path, symbol: str, hour: datetime) -> Path:
                          "%02dh_ticks.bi5" % hour.hour)
 
 
-def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 6, timeout: int = 30) -> bytes:
+def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 10, timeout: int = 30) -> bytes:
     """Devuelve los bytes .bi5 de una hora, usando el caché en disco si existe.
 
     Una hora sin ticks (fin de semana) se guarda como archivo vacío para no
@@ -69,7 +69,7 @@ def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 6, 
             last_err = e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last_err = e
-        time.sleep(2.0 * (attempt + 1))
+        time.sleep(min(90.0, 3.0 * 2 ** attempt))
     else:
         raise RuntimeError("Dukascopy no respondió para %s: %s" % (url, last_err))
     path.parent.mkdir(parents=True, exist_ok=True)
