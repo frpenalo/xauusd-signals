@@ -40,6 +40,22 @@ Dukascopy publica ticks históricos gratis por HTTP plano:
 con el mes 0-indexado (julio = `06`), comprimidos en LZMA. Devuelve 503 si se
 le pide muy seguido; el cliente reintenta con espera creciente.
 
+## Velas para Vibe-Trading
+
+```bash
+python export_candles.py --months 6
+```
+
+Baja los ticks de Dukascopy y escribe `data/candles/XAUUSD_1m.csv` con velas
+de 1 minuto (bid, UTC): `date, open, high, low, close, volume`, donde volumen
+es el número de ticks. Es reanudable y tarda alrededor de una hora por seis
+meses por el límite de velocidad de Dukascopy.
+
+Vibe-Trading lo lee por su Data Bridge (`~/.vibe-trading/data-bridge/config.yaml`,
+ya apunta a ese archivo) pidiendo el símbolo `local:XAUUSD`. El cargador
+re-muestrea a 5m, 15m, 1h, 4h o 1d según el backtest. Para extender el
+historial, correr el mismo comando otro día: continúa desde donde quedó.
+
 ## Formato del tracker
 
 Columnas usadas: `signal_date`, `signal_time`, `received_at_utc`, `direction`,
