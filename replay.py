@@ -34,6 +34,7 @@ REPLAY_CSV = ds.ROOT / "data" / "replay_signals.csv"
 REPLAY_CANDLES = ds.ROOT / "data" / "candles" / "XAUUSD_1m_replay.csv"
 BRIDGE_CONFIG = Path.home() / ".vibe-trading" / "data-bridge" / "config.yaml"
 RUNS_DIR = Path.home() / ".vibe-trading" / "runs"
+RAW_DIR = ds.ROOT / "logs" / "replay_raw"
 CUTOFF_ET = (7, 0)
 
 REPLAY_ENV = {
@@ -113,6 +114,65 @@ def newest_run_evidence(since: float) -> dict:
     return json.loads(ev.read_text(encoding="utf-8")) if ev.exists() else {}
 
 
+def keep_awake() -> None:
+    """Pide a Windows no suspender la PC mientras corre el replay (se libera al salir del proceso)."""
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+    except (AttributeError, OSError):
+        pass
+
+
+def wait_out_daily_task() -> None:
+    """La tarea diaria corre a las 7:00 AM ET y usa el Data Bridge real: no se le cruza el recorte."""
+    while True:
+        now_utc = datetime.now(timezone.utc)
+        today = now_utc.date()
+        start, end = eastern_to_utc(today, 6, 50), eastern_to_utc(today, 7, 30)
+        if not start <= now_utc < end:
+            return
+        print("ventana de la tarea diaria, esperando hasta %s UTC" % end.strftime("%H:%M"), flush=True)
+        time.sleep((end - now_utc).total_seconds() + 5)
+
+
+def with_truncated_bridge(fn):
+    """Apunta el Data Bridge al recorte solo mientras corre fn y lo restaura siempre."""
+    original = BRIDGE_CONFIG.read_text(encoding="utf-8")
+    BRIDGE_CONFIG.write_text(swap_bridge_path(original, ds.CANDLES, REPLAY_CANDLES), encoding="utf-8")
+    try:
+        return fn()
+    finally:
+        BRIDGE_CONFIG.write_text(original, encoding="utf-8")
+
+
+def ask_agent(day: date, prompt: str, live: float, cutoff: datetime, attempts: int = 3) -> tuple[dict | None, str, str]:
+    """Hasta `attempts` corridas. Una corrida sin lecturas de datos cuenta como fallida (puente de herramientas caído)."""
+    sig, reason, leak = None, "", ""
+    for attempt in range(attempts):
+        started = time.time()
+        text = prompt if not reason else prompt + "\n\nYour previous answer was rejected: %s. Fix it." % reason
+        out = ds.run_agent(text, extra_env=REPLAY_ENV)
+        evidence = newest_run_evidence(started)
+        leak = leak_check(evidence, cutoff)
+        sig = ds.extract_signal(out)
+        if not evidence.get("evidence"):
+            reason = "the agent read no market data (tool bridge failure)"
+            sig = None
+            print("  %s intento %d: sin lecturas de datos, reintento" % (day, attempt + 1), flush=True)
+            time.sleep(20)
+            continue
+        if sig is None:
+            reason = "no JSON signal found in the answer"
+            raw = RAW_DIR / ("%s_%d.txt" % (day, attempt + 1))
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_text(out, encoding="utf-8")
+            continue
+        reason = ds.validate_signal(sig, live)
+        if not reason:
+            break
+    return sig, reason, leak
+
+
 def replay_day(day: date) -> str:
     cutoff = cutoff_utc(day)
     n, live, last_ts = truncate_candles(ds.CANDLES, REPLAY_CANDLES, cutoff)
@@ -121,19 +181,8 @@ def replay_day(day: date) -> str:
     daily = ds.recent_daily_bars(path=REPLAY_CANDLES)
     prompt = REPLAY_PREAMBLE.format(today=day.isoformat(), time=cutoff.strftime("%H:%M"),
                                     start=(day - timedelta(days=14)).isoformat()) + ds.build_prompt(live, daily, cutoff)
-    sig, reason, leak = None, "", ""
-    for attempt in range(2):
-        started = time.time()
-        out = ds.run_agent(prompt if attempt == 0 else prompt + "\n\nYour previous answer was rejected: %s. Fix it." % reason,
-                           extra_env=REPLAY_ENV)
-        leak = leak_check(newest_run_evidence(started), cutoff)
-        sig = ds.extract_signal(out)
-        if sig is None:
-            reason = "no JSON signal found in the answer"
-            continue
-        reason = ds.validate_signal(sig, live)
-        if not reason:
-            break
+    wait_out_daily_task()
+    sig, reason, leak = with_truncated_bridge(lambda: ask_agent(day, prompt, live, cutoff))
     if sig is None or reason:
         return "%s: sin señal válida (%s)" % (day, reason)
     if str(sig["direction"]).upper() == "NO_TRADE":
@@ -160,13 +209,11 @@ def main(argv: list[str] | None = None) -> int:
     days = [d for d in weekdays(args.start, args.end) if d.isoformat() not in done]
     print("Replay de %d días (%d ya hechos)" % (len(days), len(done)), flush=True)
 
-    original = BRIDGE_CONFIG.read_text(encoding="utf-8")
-    BRIDGE_CONFIG.write_text(swap_bridge_path(original, ds.CANDLES, REPLAY_CANDLES), encoding="utf-8")
+    keep_awake()
     try:
         for day in days:
             print(replay_day(day), flush=True)
     finally:
-        BRIDGE_CONFIG.write_text(original, encoding="utf-8")
         if REPLAY_CANDLES.exists():
             REPLAY_CANDLES.unlink()
 
