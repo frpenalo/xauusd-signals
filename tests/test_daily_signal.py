@@ -1,6 +1,7 @@
 """Pruebas sin red de la señal diaria: extracción y validación del JSON del agente."""
 import unittest
 
+import daily_signal
 from daily_signal import extract_signal, validate_signal
 
 GOOD_SELL = {"direction": "SELL", "entry_low": 4063, "entry_high": 4065, "stop_loss": 4072,
@@ -48,3 +49,20 @@ class ValidateSignal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FormatSignalTests(unittest.TestCase):
+    ROW = {"direction": "BUY", "entry_low": "4112.0", "entry_high": "4115.0", "stop_loss": "4102.5",
+           "tp1": "4124.5", "tp2": "4135.5", "tp3": "4146.5", "signal_date": "2026-11-09",
+           "signal_time": "03:21 UTC", "notes": "live 4120.20 | x"}
+
+    def test_channel_format_pending_when_price_outside_zone(self):
+        msg = daily_signal.format_signal(self.ROW, 4120.20)
+        self.assertTrue(msg.startswith("BUY XAUUSD — Entrada pendiente en zona ⏳\n\n✔️ Entrada: 4115-4112\n"))
+        self.assertIn("🚫 SL: 4102.5\n💰 TP1: 4124.5\n💰 TP2: 4135.5\n💰 TP3: 4146.5", msg)
+
+    def test_entrada_ahora_when_price_inside_zone_and_sell_order(self):
+        row = dict(self.ROW, direction="SELL", entry_low="4186", entry_high="4188", stop_loss="4196",
+                   tp1="4180", tp2="4175", tp3="4170")
+        msg = daily_signal.format_signal(row, 4187.0)
+        self.assertTrue(msg.startswith("SELL XAUUSD — Entrada ahora 🔴\n\n✔️ Entrada: 4186-4188\n"))

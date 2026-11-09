@@ -312,10 +312,29 @@ def scoreboard() -> str:
         wins, losses, bes, sum(rs), len(rs))
 
 
+def _num(v) -> str:
+    return "%g" % float(v)
+
+
 def format_signal(row: dict, live: float) -> str:
-    return ("XAUUSD señal del agente · %s %s\n%s zona %s-%s\nSL %s\nTP1 %s · TP2 %s · TP3 %s\nPrecio en vivo %.2f\n%s"
-            % (row["signal_date"], row["signal_time"], row["direction"], row["entry_low"], row["entry_high"],
-               row["stop_loss"], row["tp1"], row["tp2"], row["tp3"], live, row["notes"].split("|", 1)[-1].strip()))
+    """Mismo formato que las señales del canal. "Entrada ahora" solo si el precio
+    en vivo ya está dentro de la zona; si no, es una entrada pendiente en la zona."""
+    lo, hi = float(row["entry_low"]), float(row["entry_high"])
+    buy = row["direction"] == "BUY"
+    zona = "%s-%s" % ((_num(hi), _num(lo)) if buy else (_num(lo), _num(hi)))
+    modo = "Entrada ahora 🔴" if lo <= live <= hi else "Entrada pendiente en zona ⏳"
+    return ("%s XAUUSD — %s
+
+✔️ Entrada: %s
+
+🚫 SL: %s
+💰 TP1: %s
+💰 TP2: %s
+💰 TP3: %s
+
+Precio en vivo: %.2f"
+            % (row["direction"], modo, zona, _num(row["stop_loss"]), _num(row["tp1"]), _num(row["tp2"]),
+               _num(row["tp3"]), live))
 
 
 def main(argv: list[str] | None = None) -> int:
