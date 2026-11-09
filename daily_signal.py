@@ -134,12 +134,12 @@ def live_price() -> float:
         return float(json.load(resp)["price"])
 
 
-def recent_daily_bars(n: int = 5) -> list[tuple[str, float, float, float, float]]:
+def recent_daily_bars(n: int = 5, path: Path = CANDLES) -> list[tuple[str, float, float, float, float]]:
     """Barras diarias (día UTC) a partir del CSV de 1 minuto, últimos n días con datos."""
-    if not CANDLES.exists():
+    if not path.exists():
         return []
     days: dict[str, list[float]] = {}
-    with CANDLES.open("rb") as f:
+    with path.open("rb") as f:
         f.seek(0, 2)
         f.seek(max(0, f.tell() - 2_000_000))  # ~2 semanas de velas de 1 minuto
         tail = f.read().decode("utf-8", errors="ignore").splitlines()[1:]
@@ -168,15 +168,16 @@ def refresh_candles() -> None:
 
 # ---------- Agente ----------
 
-def build_prompt(live: float, daily: list) -> str:
+def build_prompt(live: float, daily: list, now: datetime | None = None) -> str:
     rows = "\n".join("  %s  O %.2f  H %.2f  L %.2f  C %.2f" % r for r in daily) or "  (sin velas locales todavía)"
     y = daily[-1] if daily else ("", live, live, live, live)
-    return PROMPT.format(now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), live="%.2f" % live, daily=rows,
+    now = now or datetime.now(timezone.utc)
+    return PROMPT.format(now=now.strftime("%Y-%m-%d %H:%M"), live="%.2f" % live, daily=rows,
                          y_low="%.2f" % y[3], y_high="%.2f" % y[2], y_close="%.2f" % y[4])
 
 
-def run_agent(prompt: str, timeout_s: int = 900) -> str:
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+def run_agent(prompt: str, timeout_s: int = 900, extra_env: dict[str, str] | None = None) -> str:
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", **(extra_env or {})}
     r = subprocess.run([str(VIBE_EXE), "run", "--no-rich", "-p", prompt], cwd=VIBE_DIR, capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=timeout_s, env=env)
     return (r.stdout or "") + "\n" + (r.stderr or "")
@@ -232,44 +233,45 @@ def validate_signal(sig: dict, live: float) -> str:
 
 # ---------- Tracker del agente ----------
 
-def read_rows() -> list[dict]:
-    if not AGENT_CSV.exists():
+def read_rows(path: Path = AGENT_CSV) -> list[dict]:
+    if not path.exists():
         return []
-    with AGENT_CSV.open(encoding="utf-8", newline="") as f:
+    with path.open(encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
 
 
-def write_rows(rows: list[dict]) -> None:
-    AGENT_CSV.parent.mkdir(parents=True, exist_ok=True)
-    with AGENT_CSV.open("w", encoding="utf-8", newline="") as f:
+def write_rows(rows: list[dict], path: Path = AGENT_CSV) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=TRACKER_COLUMNS, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
 
-def append_signal(sig: dict, live: float, now: datetime) -> dict:
+def append_signal(sig: dict, live: float, now: datetime, path: Path = AGENT_CSV,
+                  source_channel: str = "vibe-trading") -> dict:
     row = {c: "" for c in TRACKER_COLUMNS}
     row.update({
         "received_at_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "signal_date": now.strftime("%Y-%m-%d"),
-        "signal_time": now.strftime("%H:%M UTC"), "source_channel": "vibe-trading", "trader": "agente",
+        "signal_time": now.strftime("%H:%M UTC"), "source_channel": source_channel, "trader": "agente",
         "instrument": "XAUUSD", "direction": sig["direction"].upper(),
         "entry_low": sig["entry_low"], "entry_high": sig["entry_high"],
         "entry_used": round((float(sig["entry_low"]) + float(sig["entry_high"])) / 2, 2),
         "stop_loss": sig["stop_loss"], "tp1": sig["tp1"], "tp2": sig["tp2"], "tp3": sig["tp3"],
         "status": "pending", "notes": "live %.2f | %s" % (live, sig.get("rationale", "")),
     })
-    rows = read_rows()
+    rows = read_rows(path)
     rows.append(row)
-    write_rows(rows)
+    write_rows(rows, path)
     return row
 
 
-def score_pending(today: date, dry_run: bool) -> list[str]:
+def score_pending(today: date, dry_run: bool, path: Path = AGENT_CSV) -> list[str]:
     """Califica señales pendientes con fecha anterior a hoy. Devuelve líneas para el mensaje."""
-    rows = read_rows()
+    rows = read_rows(path)
     if not rows:
         return []
-    signals, _ = load_tracker(AGENT_CSV)
+    signals, _ = load_tracker(path)
     by_row = {s.row: s for s in signals}
     lines = []
     for i, row in enumerate(rows, start=1):
@@ -296,12 +298,12 @@ def score_pending(today: date, dry_run: bool) -> list[str]:
         lines.append("%s %s %s-%s → %s %+.2fR (tercios %+.2fR)" % (
             s.signal_date, s.direction, s.entry_low, s.entry_high, nb.outcome, nb.r_full, nb.r_thirds))
     if not dry_run:
-        write_rows(rows)
+        write_rows(rows, path)
     return lines
 
 
-def scoreboard() -> str:
-    rows = [r for r in read_rows() if r.get("status", "").startswith("closed")]
+def scoreboard(path: Path = AGENT_CSV) -> str:
+    rows = [r for r in read_rows(path) if r.get("status", "").startswith("closed")]
     if not rows:
         return "Marcador: sin señales cerradas todavía."
     rs = [float(r["result_r"]) for r in rows if r.get("result_r")]
