@@ -388,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         msg = format_signal(row, live)
         if scored:
             msg += "\n\nResultados de ayer:\n" + "\n".join(scored)
-        msg += "\n\n" + scoreboard() + "\nExperimento de medición. Nadie opera esto."
+        msg += "\n\n" + scoreboard()
         log("señal guardada: " + json.dumps(sig))
         telegram_send(msg)
         return 0
