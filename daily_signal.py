@@ -323,16 +323,7 @@ def format_signal(row: dict, live: float) -> str:
     buy = row["direction"] == "BUY"
     zona = "%s-%s" % ((_num(hi), _num(lo)) if buy else (_num(lo), _num(hi)))
     modo = "Entrada ahora 🔴" if lo <= live <= hi else "Entrada pendiente en zona ⏳"
-    return ("%s XAUUSD — %s
-
-✔️ Entrada: %s
-
-🚫 SL: %s
-💰 TP1: %s
-💰 TP2: %s
-💰 TP3: %s
-
-Precio en vivo: %.2f"
+    return ("%s XAUUSD — %s\n\n✔️ Entrada: %s\n\n🚫 SL: %s\n💰 TP1: %s\n💰 TP2: %s\n💰 TP3: %s\n\nPrecio en vivo: %.2f"
             % (row["direction"], modo, zona, _num(row["stop_loss"]), _num(row["tp1"]), _num(row["tp2"]),
                _num(row["tp3"]), live))
 
