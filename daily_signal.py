@@ -183,15 +183,37 @@ def run_agent(prompt: str, timeout_s: int = 900, extra_env: dict[str, str] | Non
     return (r.stdout or "") + "\n" + (r.stderr or "")
 
 
+_REDACTED = re.compile(r"\(omitted[^)]*\)")
+
+
 def extract_signal(text: str) -> dict | None:
     """Último objeto JSON del texto que tenga el campo direction."""
     found = None
     for m in re.finditer(r"\{[^{}]*\"direction\"[^{}]*\}", text, flags=re.S):
         try:
-            found = json.loads(m.group(0))
+            found = json.loads(_REDACTED.sub("null", m.group(0)))
         except json.JSONDecodeError:
             continue
-    return found
+    return _fill_targets(found) if found else found
+
+
+def _fill_targets(sig: dict) -> dict:
+    """Los TP son 1R/2R/3R por regla. La capa de grounding de Vibe-Trading tacha
+    cifras calculadas (no observadas) como "(omitted)"; si faltan, se completan
+    desde la zona y el stop, que sí vienen."""
+    try:
+        lo, hi, sl = float(sig["entry_low"]), float(sig["entry_high"]), float(sig["stop_loss"])
+    except (KeyError, TypeError, ValueError):
+        return sig
+    if all(sig.get(k) is not None for k in ("tp1", "tp2", "tp3")):
+        return sig
+    mid = (lo + hi) / 2
+    risk = abs(mid - sl)
+    sign = 1 if str(sig.get("direction", "")).upper() == "BUY" else -1
+    for k, n in (("tp1", 1), ("tp2", 2), ("tp3", 3)):
+        if sig.get(k) is None:
+            sig[k] = round(mid + sign * risk * n, 2)
+    return sig
 
 
 def validate_signal(sig: dict, live: float) -> str:

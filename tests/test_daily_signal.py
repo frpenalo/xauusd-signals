@@ -66,3 +66,19 @@ class FormatSignalTests(unittest.TestCase):
                    tp1="4180", tp2="4175", tp3="4170")
         msg = daily_signal.format_signal(row, 4187.0)
         self.assertTrue(msg.startswith("SELL XAUUSD — Entrada ahora 🔴\n\n✔️ Entrada: 4186-4188\n"))
+
+
+class RedactedTargets(unittest.TestCase):
+    def test_fills_omitted_targets_from_zone_and_stop(self):
+        text = 'answer: {"direction": "SELL", "entry_low": 4395.5, "entry_high": 4397.5, "stop_loss": 4405.5, ' \
+               '"tp1": (omitted※), "tp2": (omitted※), "tp3": (omitted※), "rationale": "x"}'
+        sig = extract_signal(text)
+        self.assertEqual([sig["tp1"], sig["tp2"], sig["tp3"]], [4387.5, 4378.5, 4369.5])  # R = 9 desde 4396.5
+        self.assertEqual(validate_signal(sig, 4390.0), "")
+
+    def test_omitted_stop_is_rejected_not_invented(self):
+        text = '{"direction": "BUY", "entry_low": 4150.0, "entry_high": 4152.0, "stop_loss": (omitted※), ' \
+               '"tp1": (omitted※), "tp2": (omitted※), "tp3": (omitted※), "rationale": "x"}'
+        sig = extract_signal(text)
+        self.assertIsNone(sig["stop_loss"])
+        self.assertEqual(validate_signal(sig, 4155.0), "faltan números")
