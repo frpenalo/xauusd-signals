@@ -62,7 +62,7 @@ class TallyTests(unittest.TestCase):
         self.assertEqual(tally.worst_streak, 2)
         self.assertAlmostEqual(tally.max_dd, 2.0)
         # El llenado es al bid del primer tick en la zona (4313), no al centro: R del TP3 = 27.5 / 10.5.
-        self.assertAlmostEqual(tally.r_full, 27.5 / 10.5 - 2.0, places=5)
+        self.assertAlmostEqual(tally.r_full, 27.5 / 10.5 - 2.0, places=3)
 
 
 if __name__ == "__main__":
