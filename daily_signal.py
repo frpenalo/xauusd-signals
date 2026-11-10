@@ -446,23 +446,26 @@ def main(argv: list[str] | None = None) -> int:
                 break
             log("intento %d: rechazada (%s): %s" % (attempt + 1, reason, json.dumps(sig)))
 
+        # La señal existe desde que se envía, no desde que arrancó el script: el refresco de velas
+        # y el agente tardan minutos, y calificar desde antes simularía con precios que ya no valen.
+        issued = datetime.now(timezone.utc)
         parts = ["🤖 Agente"]
         if sig is None or reason:
             parts.append("Sin señal válida hoy (%s)." % reason)
         elif str(sig["direction"]).upper() == "NO_TRADE":
             parts.append("Sin setup hoy. %s" % sig.get("rationale", ""))
         else:
-            parts.append(format_signal(make_row(sig, live, now), live))
+            parts.append(format_signal(make_row(sig, live, issued), live))
             if not args.dry_run:
-                append_signal(sig, live, now, tag=news_tag)
+                append_signal(sig, live, issued, tag=news_tag)
             log("señal del agente: " + json.dumps(sig))
         parts.append("\n📐 Regla mecánica")
         if mech is None:
             parts.append("Sin señal hoy: %s." % mech_note)
         else:
-            parts.append(format_signal(make_row(mech, live, now, "mecanica"), live))
+            parts.append(format_signal(make_row(mech, live, issued, "mecanica"), live))
             if not args.dry_run:
-                append_signal(mech, live, now, path=MECH_CSV, source_channel="mecanica", tag=news_tag)
+                append_signal(mech, live, issued, path=MECH_CSV, source_channel="mecanica", tag=news_tag)
             log("señal mecánica: " + json.dumps(mech))
         if news_names:
             parts.append("\n⚠️ Noticia 3★ hoy: %s (%s)" % (
