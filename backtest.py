@@ -17,6 +17,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import csv
 import itertools
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -145,36 +146,86 @@ class Tally:
         self.max_dd = max(self.max_dd, self.peak - self.r_full)
 
 
-def run(contexts: list[DayContext], variants: list[Variant], tick_root: Path = TICKS) -> dict[Variant, Tally]:
-    tallies = {v: Tally() for v in variants}
+EVENTS = ROOT / "data" / "events.csv"
+FILL_WINDOW = timedelta(hours=4)
+HORIZON = timedelta(hours=24)
+
+
+def load_events(path: Path = EVENTS) -> list[tuple[datetime, str]]:
+    """Eventos de alto impacto (date, time_et, event, stars) como (hora UTC, nombre)."""
+    if not path.exists():
+        return []
+    out = []
+    with path.open(encoding="utf-8", newline="") as f:
+        for r in csv.DictReader(f):
+            h, m = r["time_et"].split(":")
+            out.append((eastern_to_utc(date.fromisoformat(r["date"]), int(h), int(m)), r["event"]))
+    return sorted(out)
+
+
+def news_in(start: datetime, events: list[tuple[datetime, str]]) -> tuple[str, str]:
+    """('ventana', nombres) si hay evento dentro de la ventana de llenado tras `start`,
+    ('horizonte', nombres) si solo dentro del horizonte de 24 h, ('normal', '') si ninguno."""
+    window = [n for t, n in events if start <= t < start + FILL_WINDOW]
+    if window:
+        return "ventana", ", ".join(window)
+    horizon = [n for t, n in events if start + FILL_WINDOW <= t < start + HORIZON]
+    if horizon:
+        return "horizonte", ", ".join(horizon)
+    return "normal", ""
+
+
+def run(contexts: list[DayContext], variants: list[Variant], tick_root: Path = TICKS,
+        events: list[tuple[datetime, str]] | None = None) -> dict[Variant, dict[str, Tally]]:
+    """Por variante: conteo 'total' y uno por tipo de día (normal / ventana / horizonte)."""
+    events = events or []
+    tallies = {v: {k: Tally() for k in ("total", "normal", "ventana", "horizonte")} for v in variants}
     for i, ctx in enumerate(contexts, start=1):
-        ticks = list(iter_ticks("XAUUSD", ctx.cutoff, ctx.cutoff + timedelta(hours=24), tick_root))
+        kind, _ = news_in(ctx.cutoff, events)
+        ticks = list(iter_ticks("XAUUSD", ctx.cutoff, ctx.cutoff + HORIZON, tick_root))
         for v in variants:
             sig = build_signal(ctx, v, row=i)
             if sig is None:
                 continue
-            tallies[v].add(simulate(sig, ticks))
-        print("%s  %d ticks" % (ctx.day, len(ticks)), flush=True)
+            res = simulate(sig, ticks)
+            tallies[v]["total"].add(res)
+            tallies[v][kind].add(res)
+        print("%s  %d ticks  %s" % (ctx.day, len(ticks), kind), flush=True)
     return tallies
 
 
-def report(tallies: dict[Variant, Tally], start: date, end: date, days: int) -> str:
+def report(tallies: dict[Variant, dict[str, Tally]], start: date, end: date, days: int) -> str:
     lines = ["# Backtest mecánico XAUUSD · %s a %s" % (start, end), "",
              "%d días hábiles con mercado al corte (7:00 AM ET). Zona de 3 puntos; TP a 1R/2R/3R. "
              "R = resultado en múltiplos del riesgo, posición completa sin BE salvo donde se indica." % days, "",
              "| Variante | Señales | Llenadas | Gana | Pierde | % acierto | R total | R/señal | R tercios | R BE10 | R BE tras TP1 | Peor racha | Drawdown máx |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-    ranked = sorted(tallies.items(), key=lambda kv: kv[1].r_full, reverse=True)
-    for v, t in ranked:
+    ranked = sorted(tallies.items(), key=lambda kv: kv[1]["total"].r_full, reverse=True)
+    for v, by in ranked:
+        t = by["total"]
         pct = 100.0 * t.wins / t.filled if t.filled else 0.0
         per = t.r_full / t.filled if t.filled else 0.0
         lines.append("| %s | %d | %d | %d | %d | %.0f%% | %+.1f | %+.2f | %+.1f | %+.1f | %+.1f | %d | %.1fR |" % (
             v.name, t.n, t.filled, t.wins, t.losses, pct, t.r_full, per, t.r_thirds, t.r_be10, t.r_be_tp1,
             t.worst_streak, t.max_dd))
-    rs = sorted(t.r_full for t in tallies.values())
+    rs = sorted(by["total"].r_full for by in tallies.values())
     median = rs[len(rs) // 2] if rs else 0.0
     lines += ["", "Mediana de R total entre las %d variantes: %+.1f. Con %d variantes probadas, la mejor fila "
               "siempre luce bien por azar: lo que cuenta es si la mayoría está por encima de cero." % (len(rs), median, len(rs))]
+
+    lines += ["", "## Por tipo de día (variantes momentum)", "",
+              "Ventana = evento de 3 estrellas dentro de las 4 h de llenado (CPI, PPI, nóminas a las 8:30 ET). "
+              "Horizonte = evento más tarde en las 24 h (FOMC a las 14:00). Normal = sin evento.", "",
+              "| Variante | Normal: llenadas / R | R por señal | Ventana: llenadas / R | R por señal | Horizonte: llenadas / R | R por señal |",
+              "|---|---|---|---|---|---|---|"]
+    for v, by in ranked:
+        if v.rule != "momentum":
+            continue
+        cells = []
+        for k in ("normal", "ventana", "horizonte"):
+            t = by[k]
+            cells.append("%d / %+.1f | %+.2f" % (t.filled, t.r_full, t.r_full / t.filled if t.filled else 0.0))
+        lines.append("| %s | %s |" % (v.name, " | ".join(cells)))
     return "\n".join(lines) + "\n"
 
 
@@ -187,8 +238,9 @@ def main(argv: list[str] | None = None) -> int:
 
     contexts = load_day_contexts(CANDLES, args.start, args.end)
     variants = [Variant(r, p, s, m) for r, p, s, m in itertools.product(RULES, PULLS, STOPS, MIN_MOVES)]
-    print("%d días, %d variantes" % (len(contexts), len(variants)), flush=True)
-    tallies = run(contexts, variants)
+    events = load_events()
+    print("%d días, %d variantes, %d eventos" % (len(contexts), len(variants), len(events)), flush=True)
+    tallies = run(contexts, variants, events=events)
     text = report(tallies, args.start, args.end, len(contexts))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8")

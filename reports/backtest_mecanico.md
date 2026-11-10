@@ -42,3 +42,28 @@
 | contra pull 8 sl 10 min 10 | 104 | 88 | 13 | 75 | 15% | -41.0 | -0.47 | -21.1 | +2.7 | -19.0 | 27 | 41.0R |
 
 Mediana de R total entre las 36 variantes: +5.0. Con 36 variantes probadas, la mejor fila siempre luce bien por azar: lo que cuenta es si la mayoría está por encima de cero.
+
+## Por tipo de día (variantes momentum)
+
+Ventana = evento de 3 estrellas dentro de las 4 h de llenado (CPI, PPI, nóminas a las 8:30 ET). Horizonte = evento más tarde en las 24 h (FOMC a las 14:00). Normal = sin evento.
+
+| Variante | Normal: llenadas / R | R por señal | Ventana: llenadas / R | R por señal | Horizonte: llenadas / R | R por señal |
+|---|---|---|---|---|---|---|
+| momentum pull 5.5 sl 10 min 0 | 91 / +30.7 | +0.34 | 17 / +15.0 | +0.88 | 4 / -0.5 | -0.12 |
+| momentum pull 8 sl 8 min 0 | 85 / +26.7 | +0.31 | 16 / +15.3 | +0.96 | 4 / -0.5 | -0.13 |
+| momentum pull 8 sl 10 min 0 | 82 / +25.0 | +0.30 | 16 / +16.1 | +1.01 | 4 / -0.5 | -0.11 |
+| momentum pull 8 sl 8 min 10 | 69 / +28.7 | +0.42 | 14 / +13.9 | +0.99 | 2 / -2.0 | -1.00 |
+| momentum pull 3 sl 10 min 0 | 100 / +28.0 | +0.28 | 18 / +10.6 | +0.59 | 4 / -0.4 | -0.11 |
+| momentum pull 5.5 sl 10 min 10 | 72 / +24.7 | +0.34 | 15 / +13.5 | +0.90 | 2 / -2.0 | -1.00 |
+| momentum pull 8 sl 10 min 10 | 66 / +23.1 | +0.35 | 14 / +14.6 | +1.04 | 2 / -2.0 | -1.00 |
+| momentum pull 5.5 sl 8 min 0 | 92 / +23.6 | +0.26 | 17 / +10.9 | +0.64 | 4 / -0.5 | -0.14 |
+| momentum pull 8 sl 6 min 0 | 85 / +16.4 | +0.19 | 16 / +14.4 | +0.90 | 4 / -0.7 | -0.16 |
+| momentum pull 3 sl 10 min 10 | 81 / +25.6 | +0.32 | 15 / +6.3 | +0.42 | 2 / -2.0 | -1.00 |
+| momentum pull 8 sl 6 min 10 | 69 / +18.8 | +0.27 | 14 / +13.0 | +0.93 | 2 / -2.0 | -1.00 |
+| momentum pull 3 sl 8 min 0 | 100 / +18.1 | +0.18 | 18 / +9.9 | +0.55 | 4 / -0.5 | -0.13 |
+| momentum pull 5.5 sl 8 min 10 | 73 / +18.2 | +0.25 | 15 / +9.5 | +0.63 | 2 / -2.0 | -1.00 |
+| momentum pull 5.5 sl 6 min 0 | 93 / +11.9 | +0.13 | 17 / +13.4 | +0.79 | 4 / -0.7 | -0.17 |
+| momentum pull 5.5 sl 6 min 10 | 74 / +7.3 | +0.10 | 15 / +12.0 | +0.80 | 2 / -2.0 | -1.00 |
+| momentum pull 3 sl 8 min 10 | 81 / +12.8 | +0.16 | 15 / +5.8 | +0.39 | 2 / -2.0 | -1.00 |
+| momentum pull 3 sl 6 min 10 | 82 / +11.9 | +0.15 | 15 / -4.9 | -0.33 | 2 / -2.0 | -1.00 |
+| momentum pull 3 sl 6 min 0 | 101 / +6.5 | +0.06 | 18 / -1.0 | -0.06 | 4 / -4.0 | -1.00 |

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import backtest
 from verifier.dukascopy import Tick
+from verifier.signals import eastern_to_utc
 from verifier.sim import simulate
 
 
@@ -54,7 +55,7 @@ class TallyTests(unittest.TestCase):
         losing = [Tick(t0, 4313.0, 4313.3), Tick(t0.replace(minute=5), 4324.0, 4324.3)]
         # Llena y baja hasta TP3 (ask <= 4285.5).
         winning = [Tick(t0, 4313.0, 4313.3), Tick(t0.replace(minute=5), 4284.0, 4284.3)]
-        tally = backtest.Tally()
+        tally = backtest.Tally()  # conteo individual; run() agrupa por tipo de día
         tally.add(simulate(sig, losing))
         tally.add(simulate(sig, losing))
         tally.add(simulate(sig, winning))
@@ -63,6 +64,20 @@ class TallyTests(unittest.TestCase):
         self.assertAlmostEqual(tally.max_dd, 2.0)
         # El llenado es al bid del primer tick en la zona (4313), no al centro: R del TP3 = 27.5 / 10.5.
         self.assertAlmostEqual(tally.r_full, 27.5 / 10.5 - 2.0, places=3)
+
+
+
+
+class Events(unittest.TestCase):
+    def test_news_in_window_horizon_and_normal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "e.csv"
+            p.write_text("date,time_et,event,stars\n2026-11-10,08:30,CPI,3\n2026-10-28,14:00,FOMC,3\n", encoding="utf-8")
+            events = backtest.load_events(p)
+        self.assertEqual(backtest.news_in(eastern_to_utc(date(2026, 11, 10), 7, 0), events), ("ventana", "CPI"))
+        self.assertEqual(backtest.news_in(eastern_to_utc(date(2026, 10, 28), 7, 0), events), ("horizonte", "FOMC"))
+        self.assertEqual(backtest.news_in(eastern_to_utc(date(2026, 10, 27), 7, 0), events), ("normal", ""))
+        self.assertEqual(backtest.load_events(Path(tmp) / "missing.csv"), [])
 
 
 if __name__ == "__main__":

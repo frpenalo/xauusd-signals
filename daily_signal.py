@@ -281,7 +281,13 @@ def write_rows(rows: list[dict], path: Path = AGENT_CSV) -> None:
         w.writerows(rows)
 
 
-def make_row(sig: dict, live: float, now: datetime, source_channel: str = "vibe-trading") -> dict:
+def news_today(now: datetime) -> tuple[str, str]:
+    """Evento de 3 estrellas (data/events.csv) dentro de la ventana de llenado o del horizonte de hoy."""
+    from backtest import load_events, news_in
+    return news_in(now, load_events())
+
+
+def make_row(sig: dict, live: float, now: datetime, source_channel: str = "vibe-trading", tag: str = "") -> dict:
     row = {c: "" for c in TRACKER_COLUMNS}
     row.update({
         "received_at_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "signal_date": now.strftime("%Y-%m-%d"),
@@ -291,14 +297,14 @@ def make_row(sig: dict, live: float, now: datetime, source_channel: str = "vibe-
         "entry_low": sig["entry_low"], "entry_high": sig["entry_high"],
         "entry_used": round((float(sig["entry_low"]) + float(sig["entry_high"])) / 2, 2),
         "stop_loss": sig["stop_loss"], "tp1": sig["tp1"], "tp2": sig["tp2"], "tp3": sig["tp3"],
-        "status": "pending", "notes": "live %.2f | %s" % (live, sig.get("rationale", "")),
+        "status": "pending", "notes": "live %.2f | %s%s" % (live, sig.get("rationale", ""), " | " + tag if tag else ""),
     })
     return row
 
 
 def append_signal(sig: dict, live: float, now: datetime, path: Path = AGENT_CSV,
-                  source_channel: str = "vibe-trading") -> dict:
-    row = make_row(sig, live, now, source_channel)
+                  source_channel: str = "vibe-trading", tag: str = "") -> dict:
+    row = make_row(sig, live, now, source_channel, tag)
     rows = read_rows(path)
     rows.append(row)
     write_rows(rows, path)
@@ -422,6 +428,8 @@ def main(argv: list[str] | None = None) -> int:
         live = live_price()
         daily = recent_daily_bars()
         mech, mech_note = mechanical_signal(live, daily, now)
+        news_kind, news_names = news_today(now)
+        news_tag = "noticia %s: %s" % (news_kind, news_names) if news_names else ""
 
         prompt = build_prompt(live, daily)
         sig = None
@@ -446,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parts.append(format_signal(make_row(sig, live, now), live))
             if not args.dry_run:
-                append_signal(sig, live, now)
+                append_signal(sig, live, now, tag=news_tag)
             log("señal del agente: " + json.dumps(sig))
         parts.append("\n📐 Regla mecánica")
         if mech is None:
@@ -454,8 +462,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parts.append(format_signal(make_row(mech, live, now, "mecanica"), live))
             if not args.dry_run:
-                append_signal(mech, live, now, path=MECH_CSV, source_channel="mecanica")
+                append_signal(mech, live, now, path=MECH_CSV, source_channel="mecanica", tag=news_tag)
             log("señal mecánica: " + json.dumps(mech))
+        if news_names:
+            parts.append("\n⚠️ Noticia 3★ hoy: %s (%s)" % (
+                news_names, "dentro de la ventana de llenado" if news_kind == "ventana" else "más tarde en el día"))
         if scored:
             parts.append("\nResultados de ayer:\n" + "\n".join(scored))
         parts.append("\n" + boards)
