@@ -82,3 +82,24 @@ class RedactedTargets(unittest.TestCase):
         sig = extract_signal(text)
         self.assertIsNone(sig["stop_loss"])
         self.assertEqual(validate_signal(sig, 4155.0), "faltan números")
+
+
+class MechanicalSignal(unittest.TestCase):
+    NOW = daily_signal.datetime(2026, 11, 9, 12, 0, tzinfo=daily_signal.timezone.utc)
+    DAILY = [("2026-11-05", 4050.0, 4080.0, 4040.0, 4075.0),
+             ("2026-11-06", 4075.0, 4110.0, 4060.0, 4069.5),
+             ("2026-11-09", 4070.0, 4125.0, 4068.0, 4120.0)]  # día de hoy, parcial: no se usa como cierre
+
+    def test_follows_move_from_last_complete_close(self):
+        sig, note = daily_signal.mechanical_signal(4120.0, self.DAILY, self.NOW)
+        self.assertEqual(note, "")
+        self.assertEqual(sig["direction"], "BUY")
+        self.assertEqual((sig["entry_low"], sig["entry_high"], sig["stop_loss"]), (4113.0, 4116.0, 4103.0))
+        self.assertEqual((sig["tp1"], sig["tp2"], sig["tp3"]), (4126.0, 4137.5, 4149.0))  # R = 11.5
+        self.assertIn("cierre 2026-11-06 4069.50", sig["rationale"])
+        self.assertEqual(daily_signal.validate_signal(sig, 4120.0), "")
+
+    def test_no_previous_day(self):
+        sig, note = daily_signal.mechanical_signal(4120.0, self.DAILY[-1:], self.NOW)
+        self.assertIsNone(sig)
+        self.assertIn("sin cierre", note)

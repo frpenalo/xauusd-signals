@@ -26,6 +26,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -128,10 +130,19 @@ def telegram_print_chat_ids() -> None:
 
 # ---------- Datos ----------
 
-def live_price() -> float:
+def live_price(retries: int = 4) -> float:
+    """El DNS de esta PC falla a ratos (getaddrinfo); se reintenta con pausa."""
     req = urllib.request.Request(LIVE_URL, headers={"User-Agent": "xauusd-signals"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return float(json.load(resp)["price"])
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return float(json.load(resp)["price"])
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt == retries - 1:
+                raise
+            log("precio en vivo, intento %d falló (%s); reintento" % (attempt + 1, e))
+            time.sleep(10 * (attempt + 1))
+    raise RuntimeError("unreachable")
 
 
 def recent_daily_bars(n: int = 5, path: Path = CANDLES) -> list[tuple[str, float, float, float, float]]:
@@ -270,22 +281,51 @@ def write_rows(rows: list[dict], path: Path = AGENT_CSV) -> None:
         w.writerows(rows)
 
 
-def append_signal(sig: dict, live: float, now: datetime, path: Path = AGENT_CSV,
-                  source_channel: str = "vibe-trading") -> dict:
+def make_row(sig: dict, live: float, now: datetime, source_channel: str = "vibe-trading") -> dict:
     row = {c: "" for c in TRACKER_COLUMNS}
     row.update({
         "received_at_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "signal_date": now.strftime("%Y-%m-%d"),
-        "signal_time": now.strftime("%H:%M UTC"), "source_channel": source_channel, "trader": "agente",
+        "signal_time": now.strftime("%H:%M UTC"), "source_channel": source_channel,
+        "trader": "regla" if source_channel == "mecanica" else "agente",
         "instrument": "XAUUSD", "direction": sig["direction"].upper(),
         "entry_low": sig["entry_low"], "entry_high": sig["entry_high"],
         "entry_used": round((float(sig["entry_low"]) + float(sig["entry_high"])) / 2, 2),
         "stop_loss": sig["stop_loss"], "tp1": sig["tp1"], "tp2": sig["tp2"], "tp3": sig["tp3"],
         "status": "pending", "notes": "live %.2f | %s" % (live, sig.get("rationale", "")),
     })
+    return row
+
+
+def append_signal(sig: dict, live: float, now: datetime, path: Path = AGENT_CSV,
+                  source_channel: str = "vibe-trading") -> dict:
+    row = make_row(sig, live, now, source_channel)
     rows = read_rows(path)
     rows.append(row)
     write_rows(rows, path)
     return row
+
+
+# ---------- Regla mecánica ----------
+
+MECH_CSV = ROOT / "data" / "mech_signals.csv"
+MECH_VARIANT = ("momentum", 5.5, 10.0, 0.0)  # la mejor del backtest de 6 meses (reports/backtest_mecanico.md)
+
+
+def mechanical_signal(live: float, daily: list, now: datetime) -> tuple[dict | None, str]:
+    """Señal de la regla del backtest: a favor del movimiento desde el cierre del último día UTC
+    completo, zona a 5.5 puntos de retroceso, stop a 10 del borde, TP a 1R/2R/3R."""
+    from backtest import DayContext, Variant, build_signal
+    today = now.strftime("%Y-%m-%d")
+    prev = [d for d in daily if d[0] < today]
+    if not prev:
+        return None, "sin cierre del día anterior en las velas locales"
+    y_date, y_close = prev[-1][0], prev[-1][4]
+    s = build_signal(DayContext(now.date(), now, live, y_close), Variant(*MECH_VARIANT))
+    if s is None:
+        return None, "precio igual al cierre anterior (%.2f), sin dirección" % y_close
+    return {"direction": s.direction, "entry_low": s.entry_low, "entry_high": s.entry_high, "stop_loss": s.stop_loss,
+            "tp1": s.tps[0], "tp2": s.tps[1], "tp3": s.tps[2],
+            "rationale": "momentum: cierre %s %.2f, ahora %.2f (%+.1f)" % (y_date, y_close, live, live - y_close)}, ""
 
 
 def score_pending(today: date, dry_run: bool, path: Path = AGENT_CSV) -> list[str]:
@@ -368,17 +408,21 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.no_refresh:
             refresh_candles()
-        scored = score_pending(now.date(), args.dry_run)
+        scored = ["🤖 " + ln for ln in score_pending(now.date(), args.dry_run)]
+        scored += ["📐 " + ln for ln in score_pending(now.date(), args.dry_run, path=MECH_CSV)]
         for ln in scored:
             log("calificada: " + ln)
+        boards = "🤖 Agente. %s\n📐 Regla. %s" % (scoreboard(), scoreboard(MECH_CSV))
         if args.score_only:
-            msg = "Resultados:\n" + "\n".join(scored) + "\n\n" + scoreboard() if scored else scoreboard()
+            msg = ("Resultados:\n" + "\n".join(scored) + "\n\n" if scored else "") + boards
             if not args.dry_run:
                 telegram_send(msg)
             return 0
 
         live = live_price()
         daily = recent_daily_bars()
+        mech, mech_note = mechanical_signal(live, daily, now)
+
         prompt = build_prompt(live, daily)
         sig = None
         reason = ""
@@ -393,29 +437,34 @@ def main(argv: list[str] | None = None) -> int:
             if not reason:
                 break
             log("intento %d: rechazada (%s): %s" % (attempt + 1, reason, json.dumps(sig)))
+
+        parts = ["🤖 Agente"]
         if sig is None or reason:
-            msg = "XAUUSD %s: el agente no produjo una señal válida (%s).\n%s" % (now.strftime("%Y-%m-%d"), reason, scoreboard())
-            log(msg)
+            parts.append("Sin señal válida hoy (%s)." % reason)
+        elif str(sig["direction"]).upper() == "NO_TRADE":
+            parts.append("Sin setup hoy. %s" % sig.get("rationale", ""))
+        else:
+            parts.append(format_signal(make_row(sig, live, now), live))
             if not args.dry_run:
-                telegram_send(msg)
-            return 1
-        if str(sig["direction"]).upper() == "NO_TRADE":
-            msg = "XAUUSD %s: sin setup hoy. %s\n%s" % (now.strftime("%Y-%m-%d"), sig.get("rationale", ""), scoreboard())
-            log(msg)
+                append_signal(sig, live, now)
+            log("señal del agente: " + json.dumps(sig))
+        parts.append("\n📐 Regla mecánica")
+        if mech is None:
+            parts.append("Sin señal hoy: %s." % mech_note)
+        else:
+            parts.append(format_signal(make_row(mech, live, now, "mecanica"), live))
             if not args.dry_run:
-                telegram_send(msg)
-            return 0
-        if args.dry_run:
-            log("dry-run, señal válida: " + json.dumps(sig))
-            return 0
-        row = append_signal(sig, live, now)
-        msg = format_signal(row, live)
+                append_signal(mech, live, now, path=MECH_CSV, source_channel="mecanica")
+            log("señal mecánica: " + json.dumps(mech))
         if scored:
-            msg += "\n\nResultados de ayer:\n" + "\n".join(scored)
-        msg += "\n\n" + scoreboard()
-        log("señal guardada: " + json.dumps(sig))
+            parts.append("\nResultados de ayer:\n" + "\n".join(scored))
+        parts.append("\n" + boards)
+        msg = "\n".join(parts)
+        if args.dry_run:
+            log("dry-run, mensaje:\n" + msg)
+            return 0
         telegram_send(msg)
-        return 0
+        return 0 if (mech is not None or (sig is not None and not reason)) else 1
     except Exception as e:  # noqa: BLE001
         log("ERROR: %r" % e)
         if not args.dry_run:
