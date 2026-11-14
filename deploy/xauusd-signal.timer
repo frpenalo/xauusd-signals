@@ -1,0 +1,11 @@
+[Unit]
+Description=XAUUSD señal mecánica, lunes a viernes 7:00 AM hora del Este
+
+[Timer]
+OnCalendar=Mon..Fri 07:00 America/New_York
+AccuracySec=1s
+# Sin Persistent: una señal que no salió a las 7:00 no se emite tarde (no sería comparable).
+Persistent=false
+
+[Install]
+WantedBy=timers.target

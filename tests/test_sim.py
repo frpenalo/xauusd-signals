@@ -135,5 +135,17 @@ class TrackerLoading(unittest.TestCase):
         self.assertEqual(len(skipped), 2)
 
 
+
+
+class SettledHours(unittest.TestCase):
+    def test_recent_hours_are_not_cacheable(self):
+        from datetime import datetime, timezone
+        from verifier.dukascopy import is_settled
+        now = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
+        self.assertFalse(is_settled(datetime(2026, 11, 12, 11, 0, tzinfo=timezone.utc), now))
+        self.assertFalse(is_settled(datetime(2026, 11, 12, 6, 0), now))   # terminó hace 5 h
+        self.assertTrue(is_settled(datetime(2026, 11, 12, 5, 0), now))    # terminó hace 6 h
+
+
 if __name__ == "__main__":
     unittest.main()

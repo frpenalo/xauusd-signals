@@ -42,6 +42,7 @@ VIBE_DIR = ROOT.parent / "vibe-trading"
 VIBE_EXE = VIBE_DIR / ".venv" / "Scripts" / "vibe-trading.exe"
 CANDLES = ROOT / "data" / "candles" / "XAUUSD_1m.csv"
 AGENT_CSV = ROOT / "data" / "agent_signals.csv"
+TICKS = ROOT / "data" / "ticks"
 TELEGRAM_ENV = ROOT / "config" / "telegram.env"
 LOG = ROOT / "logs" / "daily_signal.log"
 LIVE_URL = "https://api.gold-api.com/price/XAU"
@@ -398,82 +399,157 @@ def format_signal(row: dict, live: float) -> str:
                _num(row["tp3"]), live))
 
 
+def prev_close_from_ticks(now: datetime, tick_root: Path | None = None, max_hours: int = 120) -> tuple[str, float] | None:
+    """Cierre del último día UTC con mercado antes de hoy: bid del último tick anterior a las 00:00 UTC.
+    Equivale al cierre que usa el backtest, sin necesitar el CSV de velas (modo servidor)."""
+    from verifier.dukascopy import decode_hour, fetch_hour
+    hour = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(max_hours):
+        hour -= timedelta(hours=1)
+        ticks = decode_hour(fetch_hour("XAUUSD", hour, tick_root or TICKS), "XAUUSD", hour)
+        if ticks:
+            return hour.strftime("%Y-%m-%d"), ticks[-1].bid
+    return None
+
+
+def prune_ticks(tick_root: Path | None = None, keep_days: int = 10) -> int:
+    """Borra del caché las horas de más de keep_days días (el servidor solo califica el día anterior)."""
+    root = tick_root or TICKS
+    limit = time.time() - keep_days * 86400
+    n = 0
+    for f in root.rglob("*.bi5") if root.exists() else []:
+        if f.stat().st_mtime < limit:
+            f.unlink()
+            n += 1
+    return n
+
+
+def agent_signal(live: float, daily: list) -> tuple[dict | None, str]:
+    """Hasta 2 corridas del agente. Devuelve (señal, motivo de rechazo o '')."""
+    prompt = build_prompt(live, daily)
+    sig, reason = None, ""
+    for attempt in range(2):
+        out = run_agent(prompt if attempt == 0 else prompt + "\n\nYour previous answer was rejected: %s. Fix it." % reason)
+        sig = extract_signal(out)
+        if sig is None:
+            reason = "no JSON signal found in the answer"
+            log("intento %d: sin JSON en la respuesta" % (attempt + 1))
+            continue
+        reason = validate_signal(sig, live)
+        if not reason:
+            break
+        log("intento %d: rechazada (%s): %s" % (attempt + 1, reason, json.dumps(sig)))
+    return sig, reason
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--score-only", action="store_true")
     ap.add_argument("--no-refresh", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--telegram-chat-id", action="store_true")
+    ap.add_argument("--server", action="store_true",
+                    help="solo la regla mecánica, sin velas locales ni agente; la señal sale primero y los resultados después")
+    ap.add_argument("--agent-only", action="store_true", help="solo el agente (la regla mecánica corre en el servidor)")
+    ap.add_argument("--ping", action="store_true", help="manda un mensaje de prueba a Telegram y termina")
     args = ap.parse_args(argv)
 
     if args.telegram_chat_id:
         telegram_print_chat_ids()
         return 0
+    if args.ping:
+        ok = telegram_send("XAUUSD: prueba de conexión desde %s. Si lees esto, Telegram funciona." % os.environ.get(
+            "COMPUTERNAME", os.uname().nodename if hasattr(os, "uname") else "equipo"))
+        print("enviado" if ok else "NO enviado (revisa config/telegram.env)")
+        return 0 if ok else 1
 
+    do_agent, do_mech = not args.server, not args.agent_only
     now = datetime.now(timezone.utc)
     try:
-        if not args.no_refresh:
+        if do_agent and not args.no_refresh:
             refresh_candles()
-        scored = ["🤖 " + ln for ln in score_pending(now.date(), args.dry_run)]
-        scored += ["📐 " + ln for ln in score_pending(now.date(), args.dry_run, path=MECH_CSV)]
-        for ln in scored:
-            log("calificada: " + ln)
-        boards = "🤖 Agente. %s\n📐 Regla. %s" % (scoreboard(), scoreboard(MECH_CSV))
+
+        def score_all() -> tuple[list[str], str]:
+            lines, boards = [], []
+            if do_agent:
+                lines += ["🤖 " + ln for ln in score_pending(now.date(), args.dry_run)]
+                boards.append("🤖 Agente. " + scoreboard())
+            if do_mech:
+                lines += ["📐 " + ln for ln in score_pending(now.date(), args.dry_run, path=MECH_CSV)]
+                boards.append("📐 Regla. " + scoreboard(MECH_CSV))
+            for ln in lines:
+                log("calificada: " + ln)
+            return lines, "\n".join(boards)
+
+        # En la laptop se califica antes (el mensaje es uno solo). En el servidor la señal sale
+        # primero, a las 7:00 en punto, y la calificación (descargas lentas) va en un segundo mensaje.
+        scored, boards = ([], "") if args.server else score_all()
         if args.score_only:
+            if args.server:
+                scored, boards = score_all()
             msg = ("Resultados:\n" + "\n".join(scored) + "\n\n" if scored else "") + boards
             if not args.dry_run:
                 telegram_send(msg)
             return 0
 
         live = live_price()
-        daily = recent_daily_bars()
-        mech, mech_note = mechanical_signal(live, daily, now)
+        if args.server:
+            pc = prev_close_from_ticks(now)
+            daily = [(pc[0], pc[1], pc[1], pc[1], pc[1])] if pc else []
+        else:
+            daily = recent_daily_bars()
+        mech, mech_note = mechanical_signal(live, daily, now) if do_mech else (None, "")
         news_kind, news_names = news_today(now)
         news_tag = "noticia %s: %s" % (news_kind, news_names) if news_names else ""
-
-        prompt = build_prompt(live, daily)
-        sig = None
-        reason = ""
-        for attempt in range(2):
-            out = run_agent(prompt if attempt == 0 else prompt + "\n\nYour previous answer was rejected: %s. Fix it." % reason)
-            sig = extract_signal(out)
-            if sig is None:
-                reason = "no JSON signal found in the answer"
-                log("intento %d: sin JSON en la respuesta" % (attempt + 1))
-                continue
-            reason = validate_signal(sig, live)
-            if not reason:
-                break
-            log("intento %d: rechazada (%s): %s" % (attempt + 1, reason, json.dumps(sig)))
+        sig, reason = agent_signal(live, daily) if do_agent else (None, "")
 
         # La señal existe desde que se envía, no desde que arrancó el script: el refresco de velas
         # y el agente tardan minutos, y calificar desde antes simularía con precios que ya no valen.
         issued = datetime.now(timezone.utc)
-        parts = ["🤖 Agente"]
-        if sig is None or reason:
-            parts.append("Sin señal válida hoy (%s)." % reason)
-        elif str(sig["direction"]).upper() == "NO_TRADE":
-            parts.append("Sin setup hoy. %s" % sig.get("rationale", ""))
-        else:
-            parts.append(format_signal(make_row(sig, live, issued), live))
-            if not args.dry_run:
-                append_signal(sig, live, issued, tag=news_tag)
-            log("señal del agente: " + json.dumps(sig))
-        parts.append("\n📐 Regla mecánica")
-        if mech is None:
-            parts.append("Sin señal hoy: %s." % mech_note)
-        else:
-            parts.append(format_signal(make_row(mech, live, issued, "mecanica"), live))
-            if not args.dry_run:
-                append_signal(mech, live, issued, path=MECH_CSV, source_channel="mecanica", tag=news_tag)
-            log("señal mecánica: " + json.dumps(mech))
+        parts = []
+        if do_agent:
+            parts.append("🤖 Agente")
+            if sig is None or reason:
+                parts.append("Sin señal válida hoy (%s)." % reason)
+            elif str(sig["direction"]).upper() == "NO_TRADE":
+                parts.append("Sin setup hoy. %s" % sig.get("rationale", ""))
+            else:
+                parts.append(format_signal(make_row(sig, live, issued), live))
+                if not args.dry_run:
+                    append_signal(sig, live, issued, tag=news_tag)
+                log("señal del agente: " + json.dumps(sig))
+        if do_mech:
+            parts.append(("\n" if parts else "") + "📐 Regla mecánica")
+            if mech is None:
+                parts.append("Sin señal hoy: %s." % mech_note)
+            else:
+                parts.append(format_signal(make_row(mech, live, issued, "mecanica"), live))
+                if not args.dry_run:
+                    append_signal(mech, live, issued, path=MECH_CSV, source_channel="mecanica", tag=news_tag)
+                log("señal mecánica: " + json.dumps(mech))
         if news_names:
             parts.append("\n⚠️ Noticia 3★ hoy: %s (%s)" % (
                 news_names, "dentro de la ventana de llenado" if news_kind == "ventana" else "más tarde en el día"))
-        if scored:
-            parts.append("\nResultados de ayer:\n" + "\n".join(scored))
-        parts.append("\n" + boards)
-        msg = "\n".join(parts)
+
+        def tail(scored: list[str], boards: str) -> str:
+            return ("Resultados de ayer:\n" + "\n".join(scored) + "\n\n" if scored else "") + boards
+
+        if args.server:
+            first = "\n".join(parts)
+            if args.dry_run:
+                log("dry-run, mensaje 1:\n" + first)
+            else:
+                telegram_send(first)
+            scored, boards = score_all()
+            second = tail(scored, boards)
+            if args.dry_run:
+                log("dry-run, mensaje 2:\n" + second)
+            else:
+                telegram_send(second)
+                log("caché de ticks: %d archivos viejos borrados" % prune_ticks())
+            return 0 if mech is not None else 1
+
+        msg = "\n".join(parts) + "\n\n" + tail(scored, boards)
         if args.dry_run:
             log("dry-run, mensaje:\n" + msg)
             return 0

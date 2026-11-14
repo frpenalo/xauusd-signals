@@ -47,8 +47,6 @@ class ValidateSignal(unittest.TestCase):
         self.assertEqual(validate_signal(buy, live=3978), "")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FormatSignalTests(unittest.TestCase):
@@ -103,3 +101,37 @@ class MechanicalSignal(unittest.TestCase):
         sig, note = daily_signal.mechanical_signal(4120.0, self.DAILY[-1:], self.NOW)
         self.assertIsNone(sig)
         self.assertIn("sin cierre", note)
+
+
+class ServerMode(unittest.TestCase):
+    def test_prev_close_is_last_tick_before_midnight_utc(self):
+        import lzma, struct, tempfile
+        from pathlib import Path
+        from verifier.dukascopy import hour_cache_path
+        now = daily_signal.datetime(2026, 11, 9, 12, 0, tzinfo=daily_signal.timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Domingo 8-nov 23:00 UTC con dos ticks; el último bid es el cierre que usa la regla.
+            hour = daily_signal.datetime(2026, 11, 8, 23, 0, tzinfo=daily_signal.timezone.utc)
+            raw = lzma.compress(struct.pack(">3I2f", 1000, 4070300, 4070000, 1.0, 1.0)
+                                + struct.pack(">3I2f", 3599000, 4069845, 4069545, 1.0, 1.0))
+            p = hour_cache_path(root, "XAUUSD", hour)
+            p.parent.mkdir(parents=True)
+            p.write_bytes(raw)
+            self.assertEqual(daily_signal.prev_close_from_ticks(now, root), ("2026-11-08", 4069.545))
+
+    def test_prune_ticks_removes_only_old_files(self):
+        import os, tempfile, time
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            old, new = Path(tmp) / "a" / "00h_ticks.bi5", Path(tmp) / "b" / "00h_ticks.bi5"
+            for f in (old, new):
+                f.parent.mkdir()
+                f.write_bytes(b"x")
+            os.utime(old, (time.time() - 20 * 86400,) * 2)
+            self.assertEqual(daily_signal.prune_ticks(Path(tmp), keep_days=10), 1)
+            self.assertTrue(new.exists() and not old.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

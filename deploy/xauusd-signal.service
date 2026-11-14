@@ -1,0 +1,29 @@
+[Unit]
+Description=XAUUSD señal mecánica diaria (experimento de medición, ajeno a la radio)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=xauusd
+Group=xauusd
+WorkingDirectory=/opt/xauusd-signals
+Environment=PYTHONUTF8=1
+Environment=PYTHONIOENCODING=utf-8
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DUKASCOPY_BASE_URL=https://datafeed.dukascopy.com/datafeed
+ExecStart=/usr/bin/python3 daily_signal.py --server
+TimeoutStartSec=20min
+
+# Límites duros: si algo se descontrola se corta solo, sin afectar la radio.
+MemoryMax=400M
+CPUQuota=50%
+Nice=15
+IOSchedulingClass=idle
+
+# Aislamiento: solo puede escribir en sus propias carpetas de datos y logs.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/xauusd-signals/data /opt/xauusd-signals/logs

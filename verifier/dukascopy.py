@@ -10,6 +10,7 @@ endpoint HTTPS no contesta desde esta red.
 from __future__ import annotations
 
 import lzma
+import os
 import struct
 import time
 import urllib.error
@@ -19,11 +20,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
-BASE_URL = "http://datafeed.dukascopy.com/datafeed"
+# Desde la laptop solo responde por HTTP plano; desde el servidor redirige a HTTPS.
+BASE_URL = os.environ.get("DUKASCOPY_BASE_URL", "http://datafeed.dukascopy.com/datafeed")
 PRICE_SCALE = {"XAUUSD": 1000.0}
 TICK_STRUCT = struct.Struct(">3I2f")
 USER_AGENT = "Mozilla/5.0 (xauusd-signals verifier)"
 REQUEST_PAUSE_S = 1.0
+# Dukascopy publica cada hora con retraso. Una hora que terminó hace menos que esto puede venir
+# vacía o a medias: se usa pero no se guarda, para no congelar un archivo incompleto en el caché.
+SETTLE = timedelta(hours=6)
+
+
+def is_settled(hour: datetime, now: datetime | None = None) -> bool:
+    if hour.tzinfo is None:
+        hour = hour.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - hour >= timedelta(hours=1) + SETTLE
 
 
 @dataclass(frozen=True)
@@ -72,8 +83,9 @@ def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 10,
         time.sleep(min(90.0, 3.0 * 2 ** attempt))
     else:
         raise RuntimeError("Dukascopy no respondió para %s: %s" % (url, last_err))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(raw)
+    if is_settled(hour):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
     return raw
 
 
