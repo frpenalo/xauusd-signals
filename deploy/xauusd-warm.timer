@@ -1,0 +1,10 @@
+[Unit]
+Description=XAUUSD precalentado, lunes a viernes 6:40 AM hora del Este
+
+[Timer]
+OnCalendar=Mon..Fri 06:40 America/New_York
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

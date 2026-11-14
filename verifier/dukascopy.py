@@ -9,12 +9,12 @@ endpoint HTTPS no contesta desde esta red.
 """
 from __future__ import annotations
 
+import http.client
 import lzma
 import os
 import struct
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,12 +54,46 @@ def hour_cache_path(root: Path, symbol: str, hour: datetime) -> Path:
                          "%02dh_ticks.bi5" % hour.hour)
 
 
+_conn: tuple[str, str, http.client.HTTPConnection] | None = None
+
+
+def _close() -> None:
+    global _conn
+    if _conn is not None:
+        try:
+            _conn[2].close()
+        finally:
+            _conn = None
+
+
+def _get(url: str, timeout: int) -> tuple[int, bytes]:
+    """GET por una sola conexión persistente, reutilizada entre pedidos.
+
+    Medido el 14-nov-2026 desde el servidor: Dukascopy castiga cada conexión nueva
+    (503 o cuelgue aunque se espere 15 s), y por una conexión reutilizada responde
+    en 0.3 s por archivo. Si la conexión se cae, se cierra y el siguiente pedido abre otra.
+    """
+    global _conn
+    parts = urllib.parse.urlsplit(url)
+    if _conn is None or _conn[:2] != (parts.scheme, parts.netloc):
+        _close()
+        cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        _conn = (parts.scheme, parts.netloc, cls(parts.netloc, timeout=timeout))
+    try:
+        _conn[2].request("GET", parts.path, headers={"User-Agent": USER_AGENT, "Connection": "keep-alive"})
+        resp = _conn[2].getresponse()
+        return resp.status, resp.read()
+    except Exception:
+        _close()
+        raise
+
+
 def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 10, timeout: int = 30) -> bytes:
     """Devuelve los bytes .bi5 de una hora, usando el caché en disco si existe.
 
     Una hora sin ticks (fin de semana) se guarda como archivo vacío para no
-    volver a pedirla. Dukascopy devuelve 503 cuando se le pide muy seguido:
-    se reintenta con espera creciente y se deja una pausa corta entre pedidos.
+    volver a pedirla. Ante un 503 o un corte se reintenta con espera creciente,
+    y se deja una pausa corta entre pedidos.
     """
     path = hour_cache_path(cache_root, symbol, hour)
     if path.exists():
@@ -68,18 +102,17 @@ def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 10,
     last_err: Exception | None = None
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-            time.sleep(REQUEST_PAUSE_S)
-            break
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
+            status, raw = _get(url, timeout)
+        except (http.client.HTTPException, TimeoutError, OSError) as e:
+            last_err = e
+        else:
+            if status == 200:
+                time.sleep(REQUEST_PAUSE_S)
+                break
+            if status == 404:
                 raw = b""
                 break
-            last_err = e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            last_err = e
+            last_err = RuntimeError("HTTP %d" % status)
         time.sleep(min(90.0, 3.0 * 2 ** attempt))
     else:
         raise RuntimeError("Dukascopy no respondió para %s: %s" % (url, last_err))

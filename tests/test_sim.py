@@ -147,5 +147,38 @@ class SettledHours(unittest.TestCase):
         self.assertTrue(is_settled(datetime(2026, 11, 12, 5, 0), now))    # terminó hace 6 h
 
 
+class FetchHour(unittest.TestCase):
+    def test_retries_on_cut_and_503_then_caches_settled_hour(self):
+        import tempfile
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from unittest import mock
+        from verifier import dukascopy
+        answers = [ConnectionResetError("corte"), (503, b""), (200, b"datos")]
+
+        def fake_get(url, timeout):
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+
+        hour = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dukascopy, "_get", fake_get),                 mock.patch.object(dukascopy.time, "sleep"):
+            self.assertEqual(dukascopy.fetch_hour("XAUUSD", hour, Path(tmp)), b"datos")
+            self.assertEqual(answers, [])
+            self.assertEqual(dukascopy.hour_cache_path(Path(tmp), "XAUUSD", hour).read_bytes(), b"datos")
+
+    def test_404_is_an_empty_hour_and_recent_hours_are_not_cached(self):
+        import tempfile
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path
+        from unittest import mock
+        from verifier import dukascopy
+        recent = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dukascopy, "_get", lambda u, t: (404, b"x")),                 mock.patch.object(dukascopy.time, "sleep"):
+            self.assertEqual(dukascopy.fetch_hour("XAUUSD", recent, Path(tmp)), b"")
+            self.assertFalse(dukascopy.hour_cache_path(Path(tmp), "XAUUSD", recent).exists())
+
+
 if __name__ == "__main__":
     unittest.main()

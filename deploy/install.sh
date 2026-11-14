@@ -22,10 +22,10 @@ chmod 750 "$APP"
 chmod 700 "$APP/config"
 [ -f "$APP/config/telegram.env" ] && chmod 600 "$APP/config/telegram.env"
 
-cp deploy/xauusd-signal.service deploy/xauusd-signal.timer /etc/systemd/system/
+cp deploy/xauusd-signal.service deploy/xauusd-signal.timer deploy/xauusd-warm.service deploy/xauusd-warm.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now xauusd-signal.timer
+systemctl enable --now xauusd-signal.timer xauusd-warm.timer
 
 echo "Instalado. Próxima corrida:"
-systemctl list-timers xauusd-signal.timer --no-pager
+systemctl list-timers "xauusd-*" --no-pager
 [ -f "$APP/config/telegram.env" ] || echo "FALTA: $APP/config/telegram.env (lo pone Francisco; dueño xauusd, permisos 600)"

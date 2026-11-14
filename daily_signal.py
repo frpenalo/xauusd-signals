@@ -424,6 +424,30 @@ def prune_ticks(tick_root: Path | None = None, keep_days: int = 10) -> int:
     return n
 
 
+def warm_cache(now: datetime, path: Path | None = None) -> tuple[tuple[str, float] | None, int]:
+    """Baja con antelación lo que la corrida de las 7:00 va a necesitar de Dukascopy: el cierre
+    previo y las horas ya asentadas de las señales pendientes. Así la señal no espera a Dukascopy
+    (la primera conexión del día puede tardar minutos)."""
+    from verifier.dukascopy import fetch_hour, is_settled
+    pc = prev_close_from_ticks(now)
+    n = 0
+    path = path or MECH_CSV
+    if path.exists():
+        signals, _ = load_tracker(path)
+        rows = read_rows(path)
+        for s in signals:
+            if rows[s.row - 1].get("status") != "pending":
+                continue
+            hour = s.start_utc.replace(minute=0, second=0, microsecond=0)
+            end = min(s.start_utc + timedelta(hours=24), now)
+            while hour < end:
+                if is_settled(hour, now):
+                    fetch_hour("XAUUSD", hour, TICKS)
+                    n += 1
+                hour += timedelta(hours=1)
+    return pc, n
+
+
 def agent_signal(live: float, daily: list) -> tuple[dict | None, str]:
     """Hasta 2 corridas del agente. Devuelve (señal, motivo de rechazo o '')."""
     prompt = build_prompt(live, daily)
@@ -452,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="solo la regla mecánica, sin velas locales ni agente; la señal sale primero y los resultados después")
     ap.add_argument("--agent-only", action="store_true", help="solo el agente (la regla mecánica corre en el servidor)")
     ap.add_argument("--ping", action="store_true", help="manda un mensaje de prueba a Telegram y termina")
+    ap.add_argument("--warm", action="store_true",
+                    help="solo precalienta el caché de Dukascopy para la corrida de las 7:00 (no envía nada)")
     args = ap.parse_args(argv)
 
     if args.telegram_chat_id:
@@ -465,6 +491,10 @@ def main(argv: list[str] | None = None) -> int:
 
     do_agent, do_mech = not args.server, not args.agent_only
     now = datetime.now(timezone.utc)
+    if args.warm:
+        pc, n = warm_cache(now)
+        log("precalentado: cierre previo %s, %d horas de señales pendientes" % (pc, n))
+        return 0 if pc else 1
     try:
         if do_agent and not args.no_refresh:
             refresh_candles()

@@ -13,7 +13,7 @@ Environment=PYTHONIOENCODING=utf-8
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=DUKASCOPY_BASE_URL=https://datafeed.dukascopy.com/datafeed
 ExecStart=/usr/bin/python3 daily_signal.py --server
-TimeoutStartSec=20min
+TimeoutStartSec=45min
 
 # Límites duros: si algo se descontrola se corta solo, sin afectar la radio.
 MemoryMax=400M
