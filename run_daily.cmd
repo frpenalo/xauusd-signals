@@ -1,5 +1,5 @@
 @echo off
-rem Lanzador de la tarea programada "XAUUSD senal diaria" (lunes a viernes, 7:00 AM hora del Este).
+rem Tarea programada "XAUUSD senal diaria" (L-V 7:00 AM ET): solo la senal del agente. La regla mecanica corre en el servidor.
 cd /d "%~dp0"
 set PYTHONIOENCODING=utf-8
 set PYTHONUTF8=1
