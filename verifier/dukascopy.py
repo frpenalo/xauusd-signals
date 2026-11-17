@@ -55,6 +55,14 @@ def hour_cache_path(root: Path, symbol: str, hour: datetime) -> Path:
 
 
 _conn: tuple[str, str, http.client.HTTPConnection] | None = None
+# Dukascopy corta cada conexión a los 200 pedidos (medido el 16-nov-2026: el pedido 201 falló) y
+# castiga las conexiones nuevas seguidas. Se recicla antes del corte y se espera antes de reconectar;
+# si la conexión nueva falla, la espera se duplica y el valor que funcionó se conserva.
+MAX_REQUESTS_PER_CONN = 180
+COOLDOWN_MAX_S = 600.0
+_cooldown = 60.0
+_requests = 0
+_had_conn = False
 
 
 def _close() -> None:
@@ -73,19 +81,30 @@ def _get(url: str, timeout: int) -> tuple[int, bytes]:
     (503 o cuelgue aunque se espere 15 s), y por una conexión reutilizada responde
     en 0.3 s por archivo. Si la conexión se cae, se cierra y el siguiente pedido abre otra.
     """
-    global _conn
+    global _conn, _cooldown, _requests, _had_conn
     parts = urllib.parse.urlsplit(url)
+    if _conn is not None and _requests >= MAX_REQUESTS_PER_CONN:
+        _close()
     if _conn is None or _conn[:2] != (parts.scheme, parts.netloc):
         _close()
+        if _had_conn:
+            print("  dukascopy: espera de %d s antes de reconectar" % _cooldown, flush=True)
+            time.sleep(_cooldown)
         cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
         _conn = (parts.scheme, parts.netloc, cls(parts.netloc, timeout=timeout))
+        _requests = 0
+        _had_conn = True
     try:
         _conn[2].request("GET", parts.path, headers={"User-Agent": USER_AGENT, "Connection": "keep-alive"})
         resp = _conn[2].getresponse()
-        return resp.status, resp.read()
+        body = resp.read()
     except Exception:
+        if _requests == 0:  # falló una conexión recién abierta: la espera fue corta
+            _cooldown = min(COOLDOWN_MAX_S, _cooldown * 2)
         _close()
         raise
+    _requests += 1
+    return resp.status, body
 
 
 def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 10, timeout: int = 30) -> bytes:
@@ -104,15 +123,15 @@ def fetch_hour(symbol: str, hour: datetime, cache_root: Path, retries: int = 10,
         try:
             status, raw = _get(url, timeout)
         except (http.client.HTTPException, TimeoutError, OSError) as e:
-            last_err = e
-        else:
-            if status == 200:
-                time.sleep(REQUEST_PAUSE_S)
-                break
-            if status == 404:
-                raw = b""
-                break
-            last_err = RuntimeError("HTTP %d" % status)
+            last_err = e  # el próximo _get espera el cooldown antes de reconectar
+            continue
+        if status == 200:
+            time.sleep(REQUEST_PAUSE_S)
+            break
+        if status == 404:
+            raw = b""
+            break
+        last_err = RuntimeError("HTTP %d" % status)
         time.sleep(min(90.0, 3.0 * 2 ** attempt))
     else:
         raise RuntimeError("Dukascopy no respondió para %s: %s" % (url, last_err))

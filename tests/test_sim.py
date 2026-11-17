@@ -180,5 +180,44 @@ class FetchHour(unittest.TestCase):
             self.assertFalse(dukascopy.hour_cache_path(Path(tmp), "XAUUSD", recent).exists())
 
 
+class ConnectionRecycling(unittest.TestCase):
+    def test_recycles_before_server_limit_and_backs_off_on_fresh_failure(self):
+        from unittest import mock
+        from verifier import dukascopy as d
+
+        class FakeResp:
+            status = 200
+            def read(self): return b"ok"
+
+        class FakeConn:
+            opened = 0
+            fail_next_open = False
+            def __init__(self, host, timeout=None):
+                FakeConn.opened += 1
+                self.broken = FakeConn.fail_next_open
+                FakeConn.fail_next_open = False
+            def request(self, *a, **k):
+                if self.broken:
+                    raise ConnectionResetError("castigo")
+            def getresponse(self): return FakeResp()
+            def close(self): pass
+
+        sleeps = []
+        with mock.patch.object(d.http.client, "HTTPConnection", FakeConn),                 mock.patch.object(d.time, "sleep", sleeps.append),                 mock.patch.object(d, "MAX_REQUESTS_PER_CONN", 3),                 mock.patch.object(d, "_conn", None), mock.patch.object(d, "_requests", 0),                 mock.patch.object(d, "_had_conn", False), mock.patch.object(d, "_cooldown", 60.0):
+            url = "http://example.test/x"
+            for _ in range(3):
+                self.assertEqual(d._get(url, 5), (200, b"ok"))
+            self.assertEqual((FakeConn.opened, sleeps), (1, []))       # primera conexión: sin espera
+            d._get(url, 5)                                              # 4º pedido: recicla y espera
+            self.assertEqual((FakeConn.opened, sleeps), (2, [60.0]))
+            d._requests = 3
+            FakeConn.fail_next_open = True
+            with self.assertRaises(ConnectionResetError):               # la conexión nueva falla
+                d._get(url, 5)
+            self.assertEqual(d._cooldown, 120.0)                        # la espera se duplica
+            d._get(url, 5)
+            self.assertEqual(sleeps, [60.0, 60.0, 120.0])
+
+
 if __name__ == "__main__":
     unittest.main()
