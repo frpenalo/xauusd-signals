@@ -92,14 +92,14 @@ def _weekdays(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range((end - start).days + 1) if (start + timedelta(days=i)).weekday() < 5]
 
 
-def build_signal(ctx: DayContext, v: Variant, row: int = 0) -> Signal | None:
+def build_signal(ctx: DayContext, v: Variant, row: int = 0, width: float = ZONE_WIDTH) -> Signal | None:
     move = ctx.live - ctx.y_close
     if abs(move) < v.min_move or move == 0:
         return None
     up = move > 0
     buy = up if v.rule == "momentum" else not up
     mid = ctx.live - v.pull if buy else ctx.live + v.pull
-    lo, hi = round(mid - ZONE_WIDTH / 2, 2), round(mid + ZONE_WIDTH / 2, 2)
+    lo, hi = round(mid - width / 2, 2), round(mid + width / 2, 2)
     sl = round(lo - v.sl, 2) if buy else round(hi + v.sl, 2)
     risk = abs(mid - sl)
     sign = 1 if buy else -1
