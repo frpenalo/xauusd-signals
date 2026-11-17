@@ -16,8 +16,11 @@ Reglas de ejecución (conservadoras, con el lado correcto del spread):
 
 Se evalúan tres manejos sobre la misma secuencia de ticks:
 - no_be: sin mover el stop; cierra en SL o en el último TP.
-- be_after_min: a los N minutos del llenado (lo que hace el canal, ~10 min),
-  si el trade sigue abierto el stop pasa al precio de entrada.
+- be_after_min: desde los N minutos del llenado (lo que hace el canal, ~10 min),
+  el stop pasa al precio de entrada en cuanto el trade está en ganancia. Mientras
+  vaya perdiendo sigue el stop original: un stop en la entrada quedaría del lado
+  equivocado del mercado y no se puede poner. Al saltar sale al precio del tick,
+  no al nivel exacto, así que suele dar un poco menos de 0R.
 - be_after_tp1: al tocar TP1 el stop pasa al precio de entrada.
 
 Para cada manejo se reporta R con posición completa y R "en tercios" (un
@@ -139,7 +142,8 @@ def simulate(signal: Signal, ticks: Iterable[Tick], *, fill_window: timedelta = 
             tps_hit += 1
             if tps_hit == 1:
                 paths["be_after_tp1"]["stop"] = fill
-        if paths["be_after_min"]["stop"] == signal.stop_loss and tk.ts - fill_t >= be_after:
+        in_profit = exit_side < fill if sell else exit_side > fill
+        if paths["be_after_min"]["stop"] == signal.stop_loss and tk.ts - fill_t >= be_after and in_profit:
             paths["be_after_min"]["stop"] = fill
 
         for name, p in paths.items():
@@ -154,7 +158,8 @@ def simulate(signal: Signal, ticks: Iterable[Tick], *, fill_window: timedelta = 
                 p.update(done=True, out="TP%d" % n_tp, t=tk.ts, px=signal.tps[-1])
             elif hit_stop:
                 out = "BE" if stop == fill else "SL"
-                p.update(done=True, out=out, t=tk.ts, px=stop)
+                px = exit_side if out == "BE" and name == "be_after_min" else stop
+                p.update(done=True, out=out, t=tk.ts, px=px)
         if all(p["done"] for p in paths.values()):
             break
 

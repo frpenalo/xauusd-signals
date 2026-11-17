@@ -1,7 +1,8 @@
 """Manejo «stop a entrada a los N minutos» medido con precios de salida reales y costos.
 
-verifier/sim.py cierra el manejo be_after_min al precio de entrada exacto. Eso regala
-dos cosas que en una cuenta real no existen:
+Hasta el 17-nov-2026 verifier/sim.py cerraba el manejo be_after_min al precio de entrada
+exacto (hoy ya usa la regla be_ok de abajo). Eso regalaba dos cosas que en una cuenta
+real no existen:
 - si a los N minutos la operación va perdiendo, el stop «en entrada» quedaría del lado
   equivocado del mercado y no se puede poner; el simulador la cierra igual en 0R;
 - un stop es una orden a mercado: sale al precio del tick que lo dispara, no al nivel.
@@ -20,7 +21,7 @@ o un spread peor que el de Dukascopy) se aplica ensanchando el spread de cada ti
 que también retrasa las entradas y adelanta los stops.
 
 Antes de creerle, el reporte incluye una sección de control: con costo 0 y las reglas del
-simulador viejo debe dar los mismos números que reports/backtest_3y.md.
+simulador viejo (las claves leg_*) debe dar los mismos números que reports/backtest_3y.md.
 
 Uso:
     python backtest_be.py --candles data/candles/XAUUSD_1m_3y.csv \

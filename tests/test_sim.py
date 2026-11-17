@@ -44,8 +44,24 @@ class SellPaths(unittest.TestCase):
         r = simulate(s, ticks(path))
         self.assertEqual(r.paths["no_be"].outcome, "TP3")
         self.assertEqual(r.paths["be_after_min"].outcome, "BE")
-        self.assertEqual(r.paths["be_after_min"].r_full, 0.0)
+        # sale al ask del tick que dispara el stop (4064.4), no en la entrada exacta (4064)
+        self.assertAlmostEqual(r.paths["be_after_min"].r_full, (4064 - 4064.4) / (4072 - 4064), places=3)
         self.assertEqual(r.paths["be_after_tp1"].outcome, "TP3")
+
+    def test_be_after_minutes_keeps_original_stop_while_losing(self):
+        # a los 10 min va perdiendo (ask 4067.9 > entrada 4064): el stop no se puede mover y salta el original
+        s = sell_signal()
+        r = simulate(s, ticks([4060, 4064] + [4067] * 25 + [4071.5]))
+        self.assertEqual(r.paths["be_after_min"].outcome, "SL")
+        self.assertEqual(r.paths["be_after_min"].r_full, -1.0)
+
+    def test_be_after_minutes_moves_stop_once_in_profit(self):
+        # pierde a los 10 min, pasa a ganancia (stop a entrada) y vuelve: sale cerca de 0R, no en el stop
+        s = sell_signal()
+        r = simulate(s, ticks([4060, 4064] + [4067] * 25 + [4061, 4063.5, 4071.5]))
+        self.assertEqual(r.paths["no_be"].outcome, "SL")
+        self.assertEqual(r.paths["be_after_min"].outcome, "BE")
+        self.assertAlmostEqual(r.paths["be_after_min"].r_full, (4064 - 4064.4) / (4072 - 4064), places=3)
 
     def test_stop_uses_ask(self):
         # el bid nunca llega al stop pero el ask sí (spread)
