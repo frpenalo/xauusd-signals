@@ -234,9 +234,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--start", type=date.fromisoformat, required=True)
     ap.add_argument("--end", type=date.fromisoformat, required=True)
     ap.add_argument("--out", type=Path, default=ROOT / "reports" / "backtest_mecanico.md")
+    ap.add_argument("--candles", type=Path, default=CANDLES, help="CSV de velas de 1 minuto a usar")
     args = ap.parse_args(argv)
 
-    contexts = load_day_contexts(CANDLES, args.start, args.end)
+    contexts = load_day_contexts(args.candles, args.start, args.end)
     variants = [Variant(r, p, s, m) for r, p, s, m in itertools.product(RULES, PULLS, STOPS, MIN_MOVES)]
     events = load_events()
     print("%d días, %d variantes, %d eventos" % (len(contexts), len(variants), len(events)), flush=True)
