@@ -5,3 +5,5 @@ logs/
 __pycache__/
 *.pyc
 dist/
+.venv-stats/
+data/derived/

@@ -31,6 +31,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import csv
 import ctypes
 import itertools
 import lzma
@@ -203,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--be", default="5,10,20", help="minutos tras el llenado para mover el stop")
     ap.add_argument("--be-main", type=int, default=10)
     ap.add_argument("--out", type=Path, default=bt.ROOT / "reports" / "backtest_be.md")
+    ap.add_argument("--trades-out", type=Path, help="CSV con el resultado diario de cada variante (para overfit_check.py)")
     args = ap.parse_args(argv)
 
     if sys.platform == "win32":  # que la laptop no se duerma a media corrida
@@ -218,6 +220,13 @@ def main(argv: list[str] | None = None) -> int:
     adr = adr_before(daily_ranges(args.candles))
     ref = [r for d, r in adr.items() if ref_a <= d <= ref_b]
     adr_ref = sum(ref) / len(ref)
+
+    trades = None
+    if args.trades_out:
+        args.trades_out.parent.mkdir(parents=True, exist_ok=True)
+        trades_file = args.trades_out.open("w", encoding="utf-8", newline="")
+        trades = csv.writer(trades_file)
+        trades.writerow(["day", "family", "cost", "variant", "side", "nobe_kind", "nobe_r", "be_kind", "be_r"])
 
     stats: dict[tuple, Stat] = defaultdict(Stat)
     days = [0] * len(periods)
@@ -245,17 +254,22 @@ def main(argv: list[str] | None = None) -> int:
             b, a = bid - cost / 2, ask + cost / 2
             for fam, lst in sigs.items():
                 for v, sig in lst:
-                    if sig is None:
-                        continue
-                    res = trade(sig, t, b, a, bes)
+                    res = trade(sig, t, b, a, bes) if sig is not None else None
+                    if trades is not None:  # una fila por día y variante, operara o no
+                        nb = res["nobe", 0] if res else ("none", 0.0)
+                        bk = res["be_ok", args.be_main] if res else ("none", 0.0)
+                        trades.writerow([ctx.day, fam, "%g" % cost, v.name, sig.direction if sig is not None else "",
+                                         nb[0], "%.4f" % nb[1], bk[0], "%.4f" % bk[1]])
                     if res is None:
                         continue
                     for (mgmt, be), (kind, r) in res.items():
                         stats[fam, cost, be, mgmt, idx, v].add(kind, r)
                         stats[fam, cost, be, mgmt, -1, v].add(kind, r)
         print("%s  %d ticks  factor %.2f" % (ctx.day, t.size, f), flush=True)
+    if trades is not None:
+        trades_file.close()
 
-    rows = [("%s a %s" % p, k) for k, p in enumerate(periods)] + [("Total", -1)]
+    rows =[("%s a %s" % p, k) for k, p in enumerate(periods)] + [("Total", -1)]
     bm = args.be_main
     L = ["# Stop a entrada a los %d minutos, con precios reales y costos · %s a %s" % (bm, start, end), "",
          "Variantes momentum de backtest.py, corte 7:00 AM ET, posición completa, TP3 a 3R. Las abiertas a las 24 h se "
