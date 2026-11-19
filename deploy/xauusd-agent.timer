@@ -1,0 +1,10 @@
+[Unit]
+Description=XAUUSD señal del agente, lunes a viernes 7:00 AM hora del Este (después de la regla)
+
+[Timer]
+OnCalendar=Mon..Fri 07:00 America/New_York
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

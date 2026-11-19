@@ -1,0 +1,39 @@
+[Unit]
+Description=XAUUSD señal diaria del agente (experimento de medición, ajeno a la radio)
+# Arranca después de la regla mecánica: la señal de las 7:00 en punto nunca espera al agente.
+After=network-online.target xauusd-signal.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=xauusd
+Group=xauusd
+WorkingDirectory=/opt/xauusd-signals
+Environment=HOME=/opt/xauusd-signals
+Environment=PYTHONUTF8=1
+Environment=PYTHONIOENCODING=utf-8
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DUKASCOPY_BASE_URL=https://datafeed.dukascopy.com/datafeed
+Environment=VIBE_TRADING_DIR=/opt/xauusd-signals/vibe-trading
+Environment=CLAUDE_CLI_PATH=/opt/xauusd-signals/claude-cli/node_modules/.bin/claude
+Environment=CLAUDE_CONFIG_DIR=/opt/xauusd-signals/.claude
+Environment=PATH=/opt/xauusd-signals/claude-cli/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+# El token de larga duración de Claude lo pone Francisco con deploy/claude-token.sh.
+EnvironmentFile=-/opt/xauusd-signals/config/claude.env
+ExecStart=/usr/bin/python3 daily_signal.py --agent-only
+# Limpieza del historial de corridas del agente de más de 30 días.
+ExecStartPost=-/usr/bin/find /opt/xauusd-signals/.vibe-trading/runs -mindepth 1 -mtime +30 -delete
+TimeoutStartSec=45min
+
+# Límites duros: el servidor no tiene swap; si el agente se pasa, se corta él y no la radio.
+MemoryMax=1500M
+CPUQuota=50%
+Nice=15
+IOSchedulingClass=idle
+
+# Aislamiento: solo puede escribir en sus propias carpetas.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/xauusd-signals/data /opt/xauusd-signals/logs /opt/xauusd-signals/.vibe-trading /opt/xauusd-signals/.claude

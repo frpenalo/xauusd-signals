@@ -38,8 +38,8 @@ from verifier.signals import Signal, load_tracker
 from verifier.sim import simulate
 
 ROOT = Path(__file__).resolve().parent
-VIBE_DIR = ROOT.parent / "vibe-trading"
-VIBE_EXE = VIBE_DIR / ".venv" / "Scripts" / "vibe-trading.exe"
+VIBE_DIR = Path(os.environ.get("VIBE_TRADING_DIR") or ROOT.parent / "vibe-trading")
+VIBE_EXE = VIBE_DIR / ".venv" / ("Scripts/vibe-trading.exe" if os.name == "nt" else "bin/vibe-trading")
 CANDLES = ROOT / "data" / "candles" / "XAUUSD_1m.csv"
 AGENT_CSV = ROOT / "data" / "agent_signals.csv"
 TICKS = ROOT / "data" / "ticks"
