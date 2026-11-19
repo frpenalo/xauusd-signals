@@ -3,7 +3,7 @@
 # Correr como root desde la carpeta donde se descomprimió el paquete. Todo queda dentro de
 # /opt/xauusd-signals y a nombre del usuario xauusd. No toca Docker, Caddy, /opt/subwave, el
 # crontab de root ni los servicios de la regla (xauusd-signal, xauusd-warm) ni verifier/.
-# Es idempotente. NO activa el timer del agente: eso lo hace deploy/claude-token.sh cuando
+# Es idempotente. NO activa el timer del agente: eso lo hace xauusd-claude-token cuando
 # el inicio de sesión de Claude ya funciona.
 set -eu
 
@@ -21,12 +21,12 @@ limited() {
         --setenv=HOME=$APP --working-directory="$1" /bin/sh -c "$2"
 }
 
-mkdir -p "$VT" "$CLI" "$APP/.vibe-trading/data-bridge" "$APP/.claude" "$APP/data/candles" "$APP/deploy"
+mkdir -p "$VT" "$CLI" "$APP/.vibe-trading/data-bridge" "$APP/.claude" "$APP/data/candles"
 
 # Código de la señal: solo lo que el agente necesita además de lo ya instalado.
 cp daily_signal.py export_candles.py "$APP/"
-cp deploy/claude-token.sh "$APP/deploy/claude-token.sh"
-chmod 755 "$APP/deploy/claude-token.sh"
+# El script del token lo corre root: va fuera de las carpetas donde xauusd puede escribir.
+install -o root -g root -m 755 deploy/claude-token.sh /usr/local/sbin/xauusd-claude-token
 # Velas y registro del agente: se siembran una vez; después manda lo del servidor.
 [ -f "$APP/data/candles/XAUUSD_1m.csv" ] || cp data/candles/XAUUSD_1m.csv "$APP/data/candles/XAUUSD_1m.csv"
 [ -f "$APP/data/agent_signals.csv" ] || cp data/agent_signals.csv "$APP/data/agent_signals.csv"
@@ -82,4 +82,4 @@ echo "Agente instalado:"
 "$VT/.venv/bin/vibe-trading" --version 2>/dev/null || true
 "$CLI/node_modules/.bin/claude" --version
 du -sh "$VT" "$CLI"
-[ -f "$APP/config/claude.env" ] || echo "FALTA: el token de Claude. Lo pone Francisco con: $APP/deploy/claude-token.sh"
+[ -f "$APP/config/claude.env" ] || echo "FALTA: el token de Claude. Lo pone Francisco con: xauusd-claude-token"
